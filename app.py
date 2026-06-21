@@ -324,8 +324,20 @@ def run_inference(input_df):
     sev_enc  = int(clf.predict(input_df)[0])
     sev_prob = clf.predict_proba(input_df)[0]
     severity = slabels.get(sev_enc, "Unknown")
-    delay    = float(np.expm1(r_del.predict(input_df)[0]))   # invert log1p
-    radius   = float(np.expm1(r_rad.predict(input_df)[0]))   # invert log1p
+    delay_raw  = float(r_del.predict(input_df)[0])
+    radius_raw = float(r_rad.predict(input_df)[0])
+
+    # If models were trained on log1p targets (re-trained notebook),
+    # values will be in range ~2–5 (log space). Invert with expm1.
+    # If models were trained on raw targets (old notebook),
+    # values will already be in minutes/km range (5–80 min, 0.1–5 km).
+    # We detect which case we are in and handle both.
+    delay  = float(np.expm1(delay_raw))  if delay_raw  < 10 else float(delay_raw)
+    radius = float(np.expm1(radius_raw)) if radius_raw < 5  else float(radius_raw)
+
+    # Hard clamp: never show physically impossible values
+    delay  = float(np.clip(delay,  1.0, 180.0))   # 1 min to 3 hours
+    radius = float(np.clip(radius, 0.1,  15.0))   # 100 m to 15 km
     conf     = float(sev_prob[sev_enc])
  
     # High+Critical combined probability (for threshold at 0.30)
