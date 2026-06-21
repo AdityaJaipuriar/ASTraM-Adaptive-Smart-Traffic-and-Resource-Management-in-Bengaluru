@@ -2,7 +2,7 @@
 ASTraM — Adaptive Smart Traffic and Resource Management
 Streamlit deployment app.
 
-Loads artefacts produced by ASTraM_Final.ipynb (models/ directory).
+Loads artefacts produced by ASTraM_Final_Fixed.ipynb (models/ directory).
 Run with:  streamlit run app.py
 """
 
@@ -32,10 +32,8 @@ except ImportError:
     SHAP_OK = False
  
 import xgboost as xgb
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Page config
-# ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="ASTraM — Traffic Intelligence",
     page_icon="assets/icon.png" if os.path.exists("assets/icon.png") else None,
@@ -57,10 +55,8 @@ button[data-baseweb="tab"] { font-size:15px;font-weight:500; }
 }
 </style>
 """, unsafe_allow_html=True)
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Constants
-# ─────────────────────────────────────────────────────────────────────────────
 LOG_FILE    = "event_feedback_log.json"
 MODELS_DIR  = "models"
  
@@ -125,10 +121,8 @@ CAUSE_OPTIONS = [
 ]
 CORRIDOR_LIST = list(NODE_COORDS.keys())
 DAY_NAMES     = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Load models
-# ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_models():
     m = {}
@@ -179,10 +173,8 @@ def load_dataset():
     return df
  
 df_raw = load_dataset()
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Graph helpers
-# ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def build_graph():
     G = nx.Graph()
@@ -208,10 +200,8 @@ def best_route(G_dyn, start, end, blocked=None):
         return path, round(time, 1)
     except nx.NetworkXNoPath:
         return [], float("inf")
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Inference helpers
-# ─────────────────────────────────────────────────────────────────────────────
 HOTSPOTS = models.get("hotspots", {
     "silk_board":(12.9176,77.6233),"mg_road":(12.9757,77.6011),
     "hebbal":(13.0358,77.5970),"whitefield":(12.9698,77.7499),
@@ -296,10 +286,8 @@ def run_inference(input_df):
     prob_high  = float(sum(sev_prob[i] for i in high_idxs))
  
     return severity, conf, delay, radius, prob_high, sev_prob
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Resource calculation
-# ─────────────────────────────────────────────────────────────────────────────
 SEVERITY_MULT = {"Low":0.6, "Moderate":1.0, "High":1.5, "Critical":2.2}
  
 def compute_resources(severity, duration_hrs, radius_km):
@@ -308,10 +296,8 @@ def compute_resources(severity, duration_hrs, radius_km):
     barricades = max(2, int(radius_km * 9 * mult))
     tow        = 0 if severity == "Low" else (1 if severity == "Moderate" else 2)
     return personnel, barricades, tow
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Diversion plans
-# ─────────────────────────────────────────────────────────────────────────────
 DIVERSION = {
     "ORR": [
         "Close 1 inner lane; maintain at least 2 lanes for through traffic.",
@@ -365,10 +351,8 @@ def diversion_plan(corridor, severity):
         if key.lower() in corridor.lower():
             return steps[:n]
     return DIVERSION["default"][:n]
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Feedback log
-# ─────────────────────────────────────────────────────────────────────────────
 def append_log(record):
     log = []
     if os.path.exists(LOG_FILE):
@@ -383,17 +367,13 @@ def load_log():
         return pd.DataFrame()
     with open(LOG_FILE) as f:
         return pd.DataFrame(json.load(f))
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Session state
-# ─────────────────────────────────────────────────────────────────────────────
 for k, v in {"sim_run":False,"sim_result":None,"fb_done":False}.items():
     if k not in st.session_state:
         st.session_state[k] = v
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Header
-# ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div style="background:linear-gradient(135deg,#0d1b2a,#1b2838,#243447);
     padding:26px 32px;border-radius:12px;margin-bottom:22px;">
@@ -412,10 +392,8 @@ if missing_files:
 if "severity_clf" not in models:
     st.error("Severity model not loaded. Cannot run simulation.")
     st.stop()
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Sidebar
-# ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### Journey")
     start_pt = st.selectbox("Start corridor", CORRIDOR_LIST, index=0)
@@ -452,10 +430,8 @@ with st.sidebar:
         st.session_state.sim_run    = True
         st.session_state.sim_result = None
         st.session_state.fb_done    = False
- 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Tabs
-# ─────────────────────────────────────────────────────────────────────────────
 tab_sim, tab_impact, tab_shap, tab_log = st.tabs([
     "Live Simulation",
     "Impact Dashboard",
@@ -463,9 +439,8 @@ tab_sim, tab_impact, tab_shap, tab_log = st.tabs([
     "Feedback and Learning",
 ])
  
-# ═════════════════════════════════════════════════════════════════════════════
+
 # TAB 1 — SIMULATION
-# ═════════════════════════════════════════════════════════════════════════════
 with tab_sim:
     if not st.session_state.sim_run:
         st.info("Configure the event in the sidebar and click Run Simulation.")
@@ -699,9 +674,7 @@ with tab_sim:
             if st.session_state.fb_done:
                 st.info("Feedback already submitted for this run.")
  
-# ═════════════════════════════════════════════════════════════════════════════
 # TAB 2 — IMPACT DASHBOARD
-# ═════════════════════════════════════════════════════════════════════════════
 with tab_impact:
     st.markdown("## Corridor Incident Analysis")
     st.caption("All statistics computed directly from the ASTraM operational dataset.")
@@ -841,9 +814,7 @@ with tab_impact:
             use_container_width=True,
         )
  
-# ═════════════════════════════════════════════════════════════════════════════
 # TAB 3 — SHAP EXPLAINABILITY
-# ═════════════════════════════════════════════════════════════════════════════
 with tab_shap:
     st.markdown("## AI Explainability")
  
@@ -930,9 +901,7 @@ with tab_shap:
             st.caption("This can happen if the explainer was saved with a "
                        "different model version. Re-run the notebook to regenerate.")
  
-# ═════════════════════════════════════════════════════════════════════════════
 # TAB 4 — FEEDBACK AND LEARNING
-# ═════════════════════════════════════════════════════════════════════════════
 with tab_log:
     st.markdown("## Post-event Learning System")
     st.caption("Every confirmed event is logged. "
