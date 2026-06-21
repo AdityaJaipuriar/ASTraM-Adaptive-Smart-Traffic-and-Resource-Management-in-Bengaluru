@@ -731,7 +731,7 @@ with tab_impact:
 # TAB 3 — SHAP EXPLAINABILITY
 with tab_shap:
     st.markdown("## AI Explainability")
-
+ 
     if not st.session_state.sim_run or st.session_state.sim_result is None:
         st.info("Run a simulation first to see the prediction breakdown.")
     elif not SHAP_OK:
@@ -742,25 +742,44 @@ with tab_shap:
         r   = st.session_state.sim_result
         exp = models["shap_explainer"]
         inp = r["inp_df"]
-
+ 
         try:
             sv = exp.shap_values(inp)
-            # sv is a list (one array per class) — use the predicted class index
-            sev_labels_map = models.get("sev_labels",{0:"Low",1:"Moderate",2:"High",3:"Critical"})
-            sev_to_idx     = {v:k for k,v in sev_labels_map.items()}
-            cls_idx        = sev_to_idx.get(r["severity"], 2)
+ 
+            sev_labels_map = models.get("sev_labels", {0:"Low",1:"Moderate",2:"High",3:"Critical"})
+            sev_to_idx     = {v: k for k, v in sev_labels_map.items()}
+            cls_idx        = int(sev_to_idx.get(r["severity"], 2))
+ 
+            # SHAP returns different shapes depending on version and model type:
+            #   - list of arrays: sv[class_idx] has shape (n_samples, n_features)
+            #   - single ndarray shape (n_samples, n_features, n_classes)  [newer SHAP]
+            #   - single ndarray shape (n_classes, n_samples, n_features)  [some versions]
+            sv_arr = np.array(sv)
+ 
             if isinstance(sv, list):
-                sv_row = sv[cls_idx][0]
+                # list[n_classes] each (n_samples, n_features)
+                sv_row = np.array(sv[cls_idx])[0]
+            elif sv_arr.ndim == 3:
+                if sv_arr.shape[0] == len(sev_labels_map):
+                    # (n_classes, n_samples, n_features)
+                    sv_row = sv_arr[cls_idx, 0, :]
+                else:
+                    # (n_samples, n_features, n_classes)
+                    sv_row = sv_arr[0, :, cls_idx]
+            elif sv_arr.ndim == 2:
+                # (n_samples, n_features) — single output or already squeezed
+                sv_row = sv_arr[0]
             else:
-                sv_row = sv[0]
-
+                sv_row = sv_arr.flatten()
+ 
+            sv_row = np.array(sv_row).flatten()
             feat_shap = pd.Series(sv_row, index=inp.columns).sort_values()
-
+ 
             # Top 8 positive and negative
             top_pos = feat_shap.nlargest(8)
             top_neg = feat_shap.nsmallest(8)
             combined = pd.concat([top_neg, top_pos]).sort_values()
-
+ 
             fig_s, ax_s = plt.subplots(figsize=(8, 5))
             colors_s = ["#ef476f" if v > 0 else "#2dc653" for v in combined.values]
             ax_s.barh(combined.index, combined.values, color=colors_s)
@@ -774,27 +793,28 @@ with tab_shap:
             plt.tight_layout()
             st.pyplot(fig_s, use_container_width=True)
             plt.close(fig_s)
-
+ 
             st.markdown("### Plain-language breakdown")
             st.markdown(
                 f"The model predicted **{r['severity']}** with "
                 f"**{r['conf']:.0%}** confidence."
             )
-
+ 
             st.markdown("**Features increasing severity:**")
             for feat, val in top_pos.items():
                 clean = feat.replace("_"," ").replace(" enc","")
                 st.markdown(f"- {clean} (+{val:.3f})")
-
+ 
             st.markdown("**Features reducing severity:**")
             for feat, val in top_neg.items():
                 clean = feat.replace("_"," ").replace(" enc","")
                 st.markdown(f"- {clean} ({val:.3f})")
-
+ 
         except Exception as e:
             st.error(f"SHAP computation failed: {e}")
             st.caption("This can happen if the explainer was saved with a "
                        "different model version. Re-run the notebook to regenerate.")
+
 
 # TAB 4 — FEEDBACK AND LEARNING
 with tab_log:
