@@ -301,8 +301,8 @@ def build_row(cause, corridor, priority, hour, day, month,
         "geo_cluster":           0,
         "route_length_km":       0.0,
         "duration_log":          dur_log,
-        #"congestion_score":      _compute_congestion_score(cause, event_type, priority,requires_closure, corridor, h, duration_hrs, dow),
-        #"cause_severity":        _get_cause_severity(cause),
+        "congestion_score":      _compute_congestion_score(cause, event_type, priority,requires_closure, corridor, h, duration_hrs, dow),
+        "cause_severity":        _get_cause_severity(cause),
         **hotspot_distances(lat, lon),
     }
  
@@ -324,10 +324,10 @@ def run_inference(input_df):
     sev_prob = clf.predict_proba(input_df)[0]
     severity = slabels.get(sev_enc, "Unknown")
 
-    #delay  = float(np.expm1(r_del.predict(input_df)[0]))
-    #radius = float(np.expm1(r_rad.predict(input_df)[0]))
-    delay  = float(r_del.predict(input_df)[0])
-    radius = float(r_rad.predict(input_df)[0])
+    delay  = float(np.expm1(r_del.predict(input_df)[0]))
+    radius = float(np.expm1(r_rad.predict(input_df)[0]))
+    #delay  = float(r_del.predict(input_df)[0])
+    #radius = float(r_rad.predict(input_df)[0])
 
     conf     = float(sev_prob[sev_enc])
  
