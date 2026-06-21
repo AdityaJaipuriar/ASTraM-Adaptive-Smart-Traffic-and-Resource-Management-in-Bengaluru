@@ -32,8 +32,10 @@ except ImportError:
     SHAP_OK = False
  
 import xgboost as xgb
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Page config
+# ─────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="ASTraM — Traffic Intelligence",
     page_icon="assets/icon.png" if os.path.exists("assets/icon.png") else None,
@@ -55,10 +57,15 @@ button[data-baseweb="tab"] { font-size:15px;font-weight:500; }
 }
 </style>
 """, unsafe_allow_html=True)
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Constants
+# ─────────────────────────────────────────────────────────────────────────────
 LOG_FILE    = "event_feedback_log.json"
 MODELS_DIR  = "models"
+ 
+# Update this to match your CSV filename
+CSV_PATH = "Astram event data_anonymized - Astram event data_anonymizedb40ac87.csv"
  
 NODE_COORDS = {
     "CBD 1":                  [12.9716, 77.5946],
@@ -98,14 +105,6 @@ BASE_EDGES = [
     ("Mysore Road","Bannerghata Road",25),
 ]
  
-CORRIDOR_DENSITY = {
-    "CBD 1":3200,"CBD 2":2800,"Hosur Road":4500,"Mysore Road":3800,
-    "Magadi Road":2100,"Tumkur Road":2900,"Bellary Road 1":3100,"Bellary Road 2":2400,
-    "Airport New South Road":1800,"Old Madras Road":3600,"Old Airport Road":4200,
-    "Varthur Road":2700,"Bannerghata Road":2300,"West of Chord Road":1900,
-    "ORR West 1":3500,"ORR North 1":3300,"ORR North 2":2600,"ORR East 1":3900,
-    "ORR East 2":2800,"Hennur Main Road":2200,"IRR(Thanisandra road)":1700,
-}
  
 CORRIDOR_ZONE_MAP = {
     "CBD 1":"Central","CBD 2":"Central","Hosur Road":"South Zone 1",
@@ -126,8 +125,10 @@ CAUSE_OPTIONS = [
 ]
 CORRIDOR_LIST = list(NODE_COORDS.keys())
 DAY_NAMES     = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Load models
+# ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_models():
     m = {}
@@ -161,8 +162,27 @@ def load_models():
     return m, missing
  
 models, missing_files = load_models()
-
+ 
+@st.cache_data
+def load_dataset():
+    """Load the raw CSV and compute corridor-level statistics from real data."""
+    if not os.path.exists(CSV_PATH):
+        return None
+    df = pd.read_csv(CSV_PATH, low_memory=False)
+    df["event_cause"] = df["event_cause"].str.lower().str.strip().fillna("others")
+    df["corridor"]    = df["corridor"].fillna("Non-corridor")
+    df["priority"]    = df["priority"].fillna("Low")
+    df["requires_road_closure"] = df["requires_road_closure"].fillna(0).astype(int)
+    df["start_dt"]    = pd.to_datetime(df["start_datetime"], utc=True, errors="coerce")
+    df["hour"]        = df["start_dt"].dt.hour
+    df["day_of_week"] = df["start_dt"].dt.dayofweek
+    return df
+ 
+df_raw = load_dataset()
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Graph helpers
+# ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def build_graph():
     G = nx.Graph()
@@ -188,8 +208,10 @@ def best_route(G_dyn, start, end, blocked=None):
         return path, round(time, 1)
     except nx.NetworkXNoPath:
         return [], float("inf")
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Inference helpers
+# ─────────────────────────────────────────────────────────────────────────────
 HOTSPOTS = models.get("hotspots", {
     "silk_board":(12.9176,77.6233),"mg_road":(12.9757,77.6011),
     "hebbal":(13.0358,77.5970),"whitefield":(12.9698,77.7499),
@@ -274,8 +296,10 @@ def run_inference(input_df):
     prob_high  = float(sum(sev_prob[i] for i in high_idxs))
  
     return severity, conf, delay, radius, prob_high, sev_prob
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Resource calculation
+# ─────────────────────────────────────────────────────────────────────────────
 SEVERITY_MULT = {"Low":0.6, "Moderate":1.0, "High":1.5, "Critical":2.2}
  
 def compute_resources(severity, duration_hrs, radius_km):
@@ -284,8 +308,10 @@ def compute_resources(severity, duration_hrs, radius_km):
     barricades = max(2, int(radius_km * 9 * mult))
     tow        = 0 if severity == "Low" else (1 if severity == "Moderate" else 2)
     return personnel, barricades, tow
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Diversion plans
+# ─────────────────────────────────────────────────────────────────────────────
 DIVERSION = {
     "ORR": [
         "Close 1 inner lane; maintain at least 2 lanes for through traffic.",
@@ -339,16 +365,10 @@ def diversion_plan(corridor, severity):
         if key.lower() in corridor.lower():
             return steps[:n]
     return DIVERSION["default"][:n]
-
-# Impact quantification
-def impact(corridor, severity, duration_hrs=1.5):
-    density  = CORRIDOR_DENSITY.get(corridor, 2500)
-    vehicles = int(density * duration_hrs)
-    delays   = {"Low":5,"Moderate":12,"High":22,"Critical":38}
-    avg_del  = delays.get(severity, 12)
-    return vehicles, avg_del
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Feedback log
+# ─────────────────────────────────────────────────────────────────────────────
 def append_log(record):
     log = []
     if os.path.exists(LOG_FILE):
@@ -363,13 +383,17 @@ def load_log():
         return pd.DataFrame()
     with open(LOG_FILE) as f:
         return pd.DataFrame(json.load(f))
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Session state
+# ─────────────────────────────────────────────────────────────────────────────
 for k, v in {"sim_run":False,"sim_result":None,"fb_done":False}.items():
     if k not in st.session_state:
         st.session_state[k] = v
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Header
+# ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div style="background:linear-gradient(135deg,#0d1b2a,#1b2838,#243447);
     padding:26px 32px;border-radius:12px;margin-bottom:22px;">
@@ -388,8 +412,10 @@ if missing_files:
 if "severity_clf" not in models:
     st.error("Severity model not loaded. Cannot run simulation.")
     st.stop()
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Sidebar
+# ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### Journey")
     start_pt = st.selectbox("Start corridor", CORRIDOR_LIST, index=0)
@@ -426,16 +452,20 @@ with st.sidebar:
         st.session_state.sim_run    = True
         st.session_state.sim_result = None
         st.session_state.fb_done    = False
-
+ 
+# ─────────────────────────────────────────────────────────────────────────────
 # Tabs
+# ─────────────────────────────────────────────────────────────────────────────
 tab_sim, tab_impact, tab_shap, tab_log = st.tabs([
     "Live Simulation",
     "Impact Dashboard",
     "AI Explainability",
     "Feedback and Learning",
 ])
-
+ 
+# ═════════════════════════════════════════════════════════════════════════════
 # TAB 1 — SIMULATION
+# ═════════════════════════════════════════════════════════════════════════════
 with tab_sim:
     if not st.session_state.sim_run:
         st.info("Configure the event in the sidebar and click Run Simulation.")
@@ -470,9 +500,6 @@ with tab_sim:
         _, norm_t  = best_route(G_BASE, start_pt, end_pt)
         delay_add  = max(0, round(eta - norm_t, 1))
  
-        # Impact
-        veh, avg_del = impact(corridor, severity, dur)
- 
         # Diversion
         div_steps = diversion_plan(corridor, severity)
  
@@ -482,7 +509,6 @@ with tab_sim:
             prob_high=prob_high, alert_high=alert_high, sev_prob=sev_prob,
             personnel=personnel, barricades=barricades, tow=tow,
             path=path, eta=eta, norm_t=norm_t, delay_add=delay_add,
-            veh=veh, avg_del=avg_del,
             div_steps=div_steps, prob_dict=prob_dict, blocked=blocked,
             inp_df=inp_df,
         )
@@ -490,7 +516,7 @@ with tab_sim:
  
         # ── KPI row ────────────────────────────────────────────────────
         SEV_COLORS = {"Low":"#2dc653","Moderate":"#ffd166","High":"#ef476f","Critical":"#6a0572"}
-        k1,k2,k3,k4,k5 = st.columns(5)
+        k1,k2,k3,k4 = st.columns(4)
         k1.metric("Severity",        r["severity"])
         k2.metric("High/Critical prob (thresh=0.30)",
                   f"{r['prob_high']:.0%}",
@@ -498,7 +524,6 @@ with tab_sim:
                   delta_color="inverse")
         k3.metric("Predicted delay",  f"{r['delay']:.0f} min")
         k4.metric("Officers needed",  r["personnel"])
-        k5.metric("Vehicles at risk", f"{r['veh']:,}")
  
         st.markdown("---")
         left, right = st.columns([1, 2])
@@ -570,15 +595,9 @@ with tab_sim:
             else:
                 st.error("No viable route found between selected corridors.")
  
-            st.markdown('<div class="section-hdr">Impact Estimate</div>',
+            st.markdown('<div class="section-hdr">Affected radius</div>',
                         unsafe_allow_html=True)
-            st.markdown(f"""
-| Metric | Value |
-|--------|-------|
-| Vehicles affected | {r['veh']:,} |
-| Avg delay per vehicle | {r['avg_del']} min |
-| Affected radius | {r['radius']:.2f} km |
-""")
+            st.markdown(f"Estimated congestion footprint: **{r['radius']:.2f} km**")
  
         # ── Map panel ───────────────────────────────────────────────────
         with right:
@@ -679,48 +698,152 @@ with tab_sim:
                 st.success("Feedback recorded. View trends in the Feedback and Learning tab.")
             if st.session_state.fb_done:
                 st.info("Feedback already submitted for this run.")
-
+ 
+# ═════════════════════════════════════════════════════════════════════════════
 # TAB 2 — IMPACT DASHBOARD
+# ═════════════════════════════════════════════════════════════════════════════
 with tab_impact:
-    st.markdown("## City-wide Impact Quantification")
-    st.caption("Estimated impact of a High-severity event (1.5-hour window) "
-               "at each corridor. Based on BBMP average daily vehicle counts.")
+    st.markdown("## Corridor Incident Analysis")
+    st.caption("All statistics computed directly from the ASTraM operational dataset.")
  
-    rows = []
-    for corr in CORRIDOR_LIST:
-        v, d = impact(corr, "High", 1.5)
-        rows.append({"Corridor":corr,"Vehicles":v,"Avg delay (min)":d})
-    df_imp = pd.DataFrame(rows).sort_values("Vehicles",ascending=False)
+    if df_raw is None:
+        st.warning(
+            f"Dataset CSV not found at `{CSV_PATH}`. "
+            "Place the CSV in the same folder as app.py and restart."
+        )
+    else:
+        # ── Compute corridor stats from real data ──────────────────────
+        corr_df = df_raw[df_raw["corridor"] != "Non-corridor"].copy()
  
-    c1,c2 = st.columns(2)
-    c1.metric("Total vehicles at risk", f"{df_imp['Vehicles'].sum():,}")
-    c2.metric("Most affected corridor", df_imp.iloc[0]["Corridor"],
-              delta=f"{df_imp.iloc[0]['Vehicles']:,} vehicles")
+        stats = (
+            corr_df.groupby("corridor")
+            .agg(
+                total_incidents   = ("corridor",              "count"),
+                closure_rate      = ("requires_road_closure", "mean"),
+                high_priority_pct = ("priority",              lambda x: (x == "High").mean()),
+                top_cause         = ("event_cause",           lambda x: x.value_counts().idxmax()),
+            )
+            .reset_index()
+            .sort_values("total_incidents", ascending=False)
+        )
+        stats["closure_rate_pct"]      = (stats["closure_rate"]      * 100).round(1)
+        stats["high_priority_pct_disp"]= (stats["high_priority_pct"] * 100).round(1)
  
-    st.markdown("---")
+        # ── KPI row ────────────────────────────────────────────────────
+        total_incidents  = int(corr_df.shape[0])
+        worst_corridor   = stats.iloc[0]["corridor"]
+        worst_count      = int(stats.iloc[0]["total_incidents"])
+        highest_closure  = stats.sort_values("closure_rate", ascending=False).iloc[0]
  
-    fig_imp, ax_imp = plt.subplots(figsize=(9, 6))
-    fig_imp.suptitle("Corridor-level Impact — High Severity, 1.5-hour event",
-                     fontsize=13, fontweight="bold")
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Total corridor incidents", f"{total_incidents:,}")
+        k2.metric("Most incident-prone corridor", worst_corridor,
+                  delta=f"{worst_count} incidents")
+        k3.metric("Highest closure rate",
+                  highest_closure["corridor"],
+                  delta=f"{highest_closure['closure_rate_pct']}% of incidents closed road")
  
-    colors_v = ["#ef476f" if v>5000 else "#ffd166" if v>3500 else "#2dc653"
-                for v in df_imp["Vehicles"]]
-    ax_imp.barh(df_imp["Corridor"][::-1], df_imp["Vehicles"][::-1], color=colors_v[::-1])
-    ax_imp.set_title("Vehicles impacted per corridor")
-    ax_imp.set_xlabel("Vehicles (1.5-hr window)")
-    ax_imp.axvline(df_imp["Vehicles"].mean(), color="gray",
-                   linestyle="--", alpha=0.6, label="Average")
-    ax_imp.legend(fontsize=9)
-    ax_imp.grid(axis="x", alpha=0.3)
+        st.markdown("---")
  
-    plt.tight_layout()
-    st.pyplot(fig_imp, use_container_width=True)
-    plt.close(fig_imp)
+        # ── Plot 1: Incident count per corridor ────────────────────────
+        top_stats = stats.head(15)
+        colors_i  = ["#ef476f" if v > stats["total_incidents"].quantile(0.75)
+                     else "#ffd166" if v > stats["total_incidents"].median()
+                     else "#2dc653"
+                     for v in top_stats["total_incidents"]]
  
-    st.markdown("### Detailed table")
-    st.dataframe(df_imp, hide_index=True, use_container_width=True)
-
+        fig1, ax1 = plt.subplots(figsize=(9, 6))
+        ax1.barh(top_stats["corridor"][::-1],
+                 top_stats["total_incidents"][::-1],
+                 color=colors_i[::-1])
+        ax1.axvline(stats["total_incidents"].mean(), color="gray",
+                    linestyle="--", alpha=0.6, label="Average")
+        ax1.set_title("Incident count per corridor (top 15)", fontweight="bold")
+        ax1.set_xlabel("Number of incidents")
+        ax1.legend(fontsize=9)
+        ax1.grid(axis="x", alpha=0.3)
+        plt.tight_layout()
+        st.pyplot(fig1, use_container_width=True)
+        plt.close(fig1)
+ 
+        st.markdown("---")
+ 
+        # ── Plot 2: Closure rate + high-priority rate side by side ─────
+        fig2, axes2 = plt.subplots(1, 2, figsize=(14, 5))
+        fig2.suptitle("Corridor risk profile — from real incident data",
+                      fontsize=13, fontweight="bold")
+ 
+        top_closure = stats.sort_values("closure_rate", ascending=False).head(12)
+        axes2[0].barh(top_closure["corridor"][::-1],
+                      top_closure["closure_rate_pct"][::-1],
+                      color="#ef476f")
+        axes2[0].set_title("Road closure rate (%) per corridor")
+        axes2[0].set_xlabel("% of incidents that required road closure")
+        axes2[0].grid(axis="x", alpha=0.3)
+ 
+        top_hp = stats.sort_values("high_priority_pct", ascending=False).head(12)
+        axes2[1].barh(top_hp["corridor"][::-1],
+                      top_hp["high_priority_pct_disp"][::-1],
+                      color="#ffd166")
+        axes2[1].set_title("High-priority incident rate (%) per corridor")
+        axes2[1].set_xlabel("% of incidents flagged as High priority")
+        axes2[1].grid(axis="x", alpha=0.3)
+ 
+        plt.tight_layout()
+        st.pyplot(fig2, use_container_width=True)
+        plt.close(fig2)
+ 
+        st.markdown("---")
+ 
+        # ── Plot 3: Top event cause per corridor (heatmap-style) ───────
+        st.markdown("### Most common event cause per corridor")
+        cause_pivot = (
+            corr_df.groupby(["corridor", "event_cause"])
+            .size()
+            .reset_index(name="count")
+        )
+        top_corridors = stats.head(12)["corridor"].tolist()
+        cause_pivot   = cause_pivot[cause_pivot["corridor"].isin(top_corridors)]
+        cause_matrix  = (
+            cause_pivot.pivot_table(index="corridor", columns="event_cause",
+                                    values="count", fill_value=0)
+        )
+        # Keep only top 6 causes for readability
+        top_causes    = cause_pivot.groupby("event_cause")["count"].sum()\
+                                   .nlargest(6).index.tolist()
+        cause_matrix  = cause_matrix[[c for c in top_causes if c in cause_matrix.columns]]
+ 
+        fig3, ax3 = plt.subplots(figsize=(12, 5))
+        im = ax3.imshow(cause_matrix.values, aspect="auto", cmap="YlOrRd")
+        ax3.set_xticks(range(len(cause_matrix.columns)))
+        ax3.set_xticklabels(cause_matrix.columns, rotation=30, ha="right", fontsize=10)
+        ax3.set_yticks(range(len(cause_matrix.index)))
+        ax3.set_yticklabels(cause_matrix.index, fontsize=9)
+        plt.colorbar(im, ax=ax3, label="Incident count")
+        ax3.set_title("Incident heatmap — corridor vs event cause (top 12 corridors, top 6 causes)",
+                      fontweight="bold")
+        plt.tight_layout()
+        st.pyplot(fig3, use_container_width=True)
+        plt.close(fig3)
+ 
+        # ── Full stats table ───────────────────────────────────────────
+        st.markdown("### Full corridor statistics table")
+        display_cols = {
+            "corridor":             "Corridor",
+            "total_incidents":      "Total incidents",
+            "closure_rate_pct":     "Closure rate (%)",
+            "high_priority_pct_disp": "High priority (%)",
+            "top_cause":            "Most common cause",
+        }
+        st.dataframe(
+            stats[list(display_cols.keys())].rename(columns=display_cols),
+            hide_index=True,
+            use_container_width=True,
+        )
+ 
+# ═════════════════════════════════════════════════════════════════════════════
 # TAB 3 — SHAP EXPLAINABILITY
+# ═════════════════════════════════════════════════════════════════════════════
 with tab_shap:
     st.markdown("## AI Explainability")
  
@@ -806,8 +929,10 @@ with tab_shap:
             st.error(f"SHAP computation failed: {e}")
             st.caption("This can happen if the explainer was saved with a "
                        "different model version. Re-run the notebook to regenerate.")
-
+ 
+# ═════════════════════════════════════════════════════════════════════════════
 # TAB 4 — FEEDBACK AND LEARNING
+# ═════════════════════════════════════════════════════════════════════════════
 with tab_log:
     st.markdown("## Post-event Learning System")
     st.caption("Every confirmed event is logged. "
