@@ -17,7 +17,6 @@ resource_model_manpower.pkl
 resource_model_tow.pkl
 resource_model.png
 shap_beeswarm.png
-shap_explainer.pkl
 shap_global.png
 Theme2.ipynb
 traffic_graph.pkl
