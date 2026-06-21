@@ -10,7 +10,7 @@ import os
 import json
 import warnings
 from datetime import datetime
-
+ 
 import joblib
 import numpy as np
 import pandas as pd
@@ -20,17 +20,17 @@ import networkx as nx
 import folium
 from streamlit_folium import st_folium
 from geopy.distance import geodesic
-
+ 
 warnings.filterwarnings("ignore")
-
+ 
 import streamlit as st
-
+ 
 try:
     import shap
     SHAP_OK = True
 except ImportError:
     SHAP_OK = False
-
+ 
 import xgboost as xgb
 
 # Page config
@@ -40,7 +40,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
+ 
 st.markdown("""
 <style>
 div[data-testid="metric-container"] {
@@ -59,7 +59,7 @@ button[data-baseweb="tab"] { font-size:15px;font-weight:500; }
 # Constants
 LOG_FILE    = "event_feedback_log.json"
 MODELS_DIR  = "models"
-
+ 
 NODE_COORDS = {
     "CBD 1":                  [12.9716, 77.5946],
     "CBD 2":                  [12.9650, 77.5900],
@@ -83,7 +83,7 @@ NODE_COORDS = {
     "Hennur Main Road":       [13.0300, 77.6300],
     "IRR(Thanisandra road)":  [13.0500, 77.6300],
 }
-
+ 
 BASE_EDGES = [
     ("CBD 1","CBD 2",5), ("CBD 1","Old Airport Road",15), ("CBD 1","Hosur Road",20),
     ("CBD 1","Bellary Road 1",18), ("CBD 1","Magadi Road",15), ("CBD 1","Old Madras Road",16),
@@ -97,7 +97,7 @@ BASE_EDGES = [
     ("Tumkur Road","ORR West 1",10), ("ORR West 1","Mysore Road",15),
     ("Mysore Road","Bannerghata Road",25),
 ]
-
+ 
 CORRIDOR_DENSITY = {
     "CBD 1":3200,"CBD 2":2800,"Hosur Road":4500,"Mysore Road":3800,
     "Magadi Road":2100,"Tumkur Road":2900,"Bellary Road 1":3100,"Bellary Road 2":2400,
@@ -106,7 +106,7 @@ CORRIDOR_DENSITY = {
     "ORR West 1":3500,"ORR North 1":3300,"ORR North 2":2600,"ORR East 1":3900,
     "ORR East 2":2800,"Hennur Main Road":2200,"IRR(Thanisandra road)":1700,
 }
-
+ 
 CORRIDOR_ZONE_MAP = {
     "CBD 1":"Central","CBD 2":"Central","Hosur Road":"South Zone 1",
     "Mysore Road":"West Zone 2","Magadi Road":"West Zone 1",
@@ -119,7 +119,7 @@ CORRIDOR_ZONE_MAP = {
     "ORR East 1":"East Zone 1","ORR East 2":"East Zone 1",
     "Hennur Main Road":"North Zone 2","IRR(Thanisandra road)":"North Zone 2",
 }
-
+ 
 CAUSE_OPTIONS = [
     "vehicle_breakdown","tree_fall","accident","congestion",
     "water_logging","construction","public_event","procession","vip_movement",
@@ -159,7 +159,7 @@ def load_models():
             obj.load_model(path)
             m[key] = obj
     return m, missing
-
+ 
 models, missing_files = load_models()
 
 # Graph helpers
@@ -168,16 +168,16 @@ def build_graph():
     G = nx.Graph()
     G.add_weighted_edges_from(BASE_EDGES)
     return G
-
+ 
 G_BASE = build_graph()
-
+ 
 def probabilistic_graph(corridor_probs: dict) -> nx.Graph:
     G = G_BASE.copy()
     for u, v, data in G.edges(data=True):
         p = max(corridor_probs.get(u, 0.0), corridor_probs.get(v, 0.0))
         G[u][v]["weight"] = data["weight"] * (1.0 + p ** 2)
     return G
-
+ 
 def best_route(G_dyn, start, end, blocked=None):
     G_tmp = G_dyn.copy()
     if blocked and G_tmp.has_node(blocked) and blocked not in (start, end):
@@ -195,19 +195,19 @@ HOTSPOTS = models.get("hotspots", {
     "hebbal":(13.0358,77.5970),"whitefield":(12.9698,77.7499),
     "electronic_city":(12.8456,77.6603),"city_center":(12.9716,77.5946),
 })
-
+ 
 def safe_enc(le, val, fallback=0):
     try:
         return int(le.transform([str(val)])[0])
     except (ValueError, AttributeError):
         return fallback
-
+ 
 def hotspot_distances(lat, lon):
     if lat is None or lon is None or np.isnan(float(lat)):
         return {f"dist_{k}_km": 0.0 for k in HOTSPOTS}
     return {f"dist_{k}_km": geodesic((lat, lon), coords).km
             for k, coords in HOTSPOTS.items()}
-
+ 
 def build_row(cause, corridor, priority, hour, day, month,
               zone, veh_type, event_type, requires_closure,
               lat, lon, duration_hrs):
@@ -216,11 +216,11 @@ def build_row(cause, corridor, priority, hour, day, month,
     h    = int(hour)
     dow  = int(day)
     corr_zone = corridor + " | " + zone
-
+ 
     # Duration: apply P90 cap then log
     cap      = p90.get(cause, 48)
     dur_log  = float(np.log1p(min(duration_hrs, cap)))
-
+ 
     row = {
         "event_type_enc":        safe_enc(le.get("event_type"),     event_type),
         "event_cause_enc":       safe_enc(le.get("event_cause"),    cause),
@@ -247,37 +247,37 @@ def build_row(cause, corridor, priority, hour, day, month,
         "duration_log":          dur_log,
         **hotspot_distances(lat, lon),
     }
-
+ 
     feature_cols = models.get("feature_cols", list(row.keys()))
     df = pd.DataFrame([row])
     for col in feature_cols:
         if col not in df.columns:
             df[col] = 0
     return df[feature_cols]
-
+ 
 def run_inference(input_df):
     clf    = models.get("severity_clf")
     r_del  = models.get("delay_reg")
     r_rad  = models.get("radius_reg")
     sev_le = models.get("sev_le")
     slabels= models.get("sev_labels", {0:"Low",1:"Moderate",2:"High",3:"Critical"})
-
+ 
     sev_enc  = int(clf.predict(input_df)[0])
     sev_prob = clf.predict_proba(input_df)[0]
     severity = slabels.get(sev_enc, "Unknown")
     delay    = float(r_del.predict(input_df)[0])
     radius   = float(r_rad.predict(input_df)[0])
     conf     = float(sev_prob[sev_enc])
-
+ 
     # High+Critical combined probability (for threshold at 0.30)
     high_idxs = [i for i, l in slabels.items() if l in ("High","Critical")]
     prob_high  = float(sum(sev_prob[i] for i in high_idxs))
-
+ 
     return severity, conf, delay, radius, prob_high, sev_prob
 
 # Resource calculation
 SEVERITY_MULT = {"Low":0.6, "Moderate":1.0, "High":1.5, "Critical":2.2}
-
+ 
 def compute_resources(severity, duration_hrs, radius_km):
     mult       = SEVERITY_MULT.get(severity, 1.0)
     personnel  = max(4, int(duration_hrs * mult * 2.5))
@@ -330,9 +330,9 @@ DIVERSION = {
         "Coordinate with the local police station for barricade deployment.",
     ],
 }
-
+ 
 N_STEPS = {"Low":1, "Moderate":2, "High":3, "Critical":4}
-
+ 
 def diversion_plan(corridor, severity):
     n = N_STEPS.get(severity, 2)
     for key, steps in DIVERSION.items():
@@ -346,8 +346,7 @@ def impact(corridor, severity, duration_hrs=1.5):
     vehicles = int(density * duration_hrs)
     delays   = {"Low":5,"Moderate":12,"High":22,"Critical":38}
     avg_del  = delays.get(severity, 12)
-    cost     = int((vehicles * avg_del / 60) * 150)
-    return vehicles, avg_del, cost
+    return vehicles, avg_del
 
 # Feedback log
 def append_log(record):
@@ -358,7 +357,7 @@ def append_log(record):
     log.append(record)
     with open(LOG_FILE, "w") as f:
         json.dump(log, f, indent=2)
-
+ 
 def load_log():
     if not os.path.exists(LOG_FILE):
         return pd.DataFrame()
@@ -382,7 +381,7 @@ st.markdown("""
   </p>
 </div>
 """, unsafe_allow_html=True)
-
+ 
 if missing_files:
     st.warning(f"Model files not found: {', '.join(missing_files)}. "
                "Run ASTraM_Final.ipynb first to generate the models/ directory.")
@@ -395,33 +394,33 @@ with st.sidebar:
     st.markdown("### Journey")
     start_pt = st.selectbox("Start corridor", CORRIDOR_LIST, index=0)
     end_pt   = st.selectbox("Destination",    CORRIDOR_LIST, index=11)
-
+ 
     st.markdown("### Event")
     cause     = st.selectbox("Event cause",     CAUSE_OPTIONS)
     corridor  = st.selectbox("Event corridor",  CORRIDOR_LIST, index=10)
     priority  = st.selectbox("Priority",        ["High","Low"])
     event_type= st.selectbox("Event type",      ["unplanned","planned"])
     req_close = st.checkbox("Road closure reported", value=False)
-
+ 
     st.markdown("### Time")
     hour  = st.slider("Hour (0–23)",              0, 23, 18)
     day   = st.slider(f"Day of week (0=Monday)",  0,  6,  2)
     month = st.slider("Month",                    1, 12,  6)
     dur   = st.slider("Expected duration (hrs)",  0.5, 8.0, 2.0, 0.5)
-
+ 
     st.caption(
         f"{DAY_NAMES[day]}  "
         f"{'— Morning peak' if 7<=hour<10 else '— Evening peak' if 16<=hour<21 else '— Off-peak'}"
     )
-
+ 
     st.markdown("### Location (optional)")
     lat_in = st.number_input("Latitude",  value=float(NODE_COORDS[corridor][0]), format="%.4f")
     lon_in = st.number_input("Longitude", value=float(NODE_COORDS[corridor][1]), format="%.4f")
-
+ 
     veh_type = st.selectbox("Vehicle type", ["none","car","bmtc_bus","truck","two_wheeler"])
     zone      = CORRIDOR_ZONE_MAP.get(corridor, "Unknown")
     st.caption(f"Zone: {zone}")
-
+ 
     st.markdown("---")
     if st.button("Run Simulation", type="primary", use_container_width=True):
         st.session_state.sim_run    = True
@@ -448,7 +447,7 @@ with tab_sim:
             folium.PolyLine([NODE_COORDS[u],NODE_COORDS[v]],
                             color="#cccccc",weight=1.5,opacity=0.4).add_to(m0)
         st_folium(m0, width="100%", height=440)
-
+ 
     else:
         # ── Inference ─────────────────────────────────────────────────
         inp_df = build_row(
@@ -456,13 +455,13 @@ with tab_sim:
             zone, veh_type, event_type, req_close, lat_in, lon_in, dur
         )
         severity, conf, delay, radius, prob_high, sev_prob = run_inference(inp_df)
-
+ 
         # Use 0.30 threshold for High/Critical alert
         alert_high = prob_high >= 0.30
-
+ 
         # Resources
         personnel, barricades, tow = compute_resources(severity, dur, radius)
-
+ 
         # Graph routing
         prob_dict  = {corridor: min(prob_high, 1.0)}
         G_dyn      = probabilistic_graph(prob_dict)
@@ -470,25 +469,25 @@ with tab_sim:
         path, eta  = best_route(G_dyn, start_pt, end_pt, blocked=blocked)
         _, norm_t  = best_route(G_BASE, start_pt, end_pt)
         delay_add  = max(0, round(eta - norm_t, 1))
-
+ 
         # Impact
-        veh, avg_del, econ_cost = impact(corridor, severity, dur)
-
+        veh, avg_del = impact(corridor, severity, dur)
+ 
         # Diversion
         div_steps = diversion_plan(corridor, severity)
-
+ 
         # Save to session
         st.session_state.sim_result = dict(
             severity=severity, conf=conf, delay=delay, radius=radius,
             prob_high=prob_high, alert_high=alert_high, sev_prob=sev_prob,
             personnel=personnel, barricades=barricades, tow=tow,
             path=path, eta=eta, norm_t=norm_t, delay_add=delay_add,
-            veh=veh, avg_del=avg_del, econ_cost=econ_cost,
+            veh=veh, avg_del=avg_del,
             div_steps=div_steps, prob_dict=prob_dict, blocked=blocked,
             inp_df=inp_df,
         )
         r = st.session_state.sim_result
-
+ 
         # ── KPI row ────────────────────────────────────────────────────
         SEV_COLORS = {"Low":"#2dc653","Moderate":"#ffd166","High":"#ef476f","Critical":"#6a0572"}
         k1,k2,k3,k4,k5 = st.columns(5)
@@ -500,15 +499,15 @@ with tab_sim:
         k3.metric("Predicted delay",  f"{r['delay']:.0f} min")
         k4.metric("Officers needed",  r["personnel"])
         k5.metric("Vehicles at risk", f"{r['veh']:,}")
-
+ 
         st.markdown("---")
         left, right = st.columns([1, 2])
-
+ 
         # ── Left panel ──────────────────────────────────────────────────
         with left:
             st.markdown('<div class="section-hdr">Prediction</div>',
                         unsafe_allow_html=True)
-
+ 
             sev_col = SEV_COLORS.get(r["severity"], "#aaaaaa")
             if r["severity"] == "Critical":
                 st.error(f"CRITICAL — Full road closure expected. Confidence: {r['conf']:.0%}")
@@ -518,12 +517,12 @@ with tab_sim:
                 st.warning(f"MODERATE — Heavy delays likely. Confidence: {r['conf']:.0%}")
             else:
                 st.success(f"LOW severity. Traffic will flow with minor delays.")
-
+ 
             # Severity probability bar
             slabels_ordered = ["Low","Moderate","High","Critical"]
             sev_labels_map  = models.get("sev_labels",{0:"Low",1:"Moderate",2:"High",3:"Critical"})
             sev_order_idx   = {v:k for k,v in sev_labels_map.items()}
-
+ 
             fig_b, ax_b = plt.subplots(figsize=(4, 1.4))
             bar_colors = [SEV_COLORS[l] for l in slabels_ordered
                           if l in sev_order_idx]
@@ -541,7 +540,7 @@ with tab_sim:
             plt.tight_layout()
             st.pyplot(fig_b, use_container_width=True)
             plt.close(fig_b)
-
+ 
             st.markdown('<div class="section-hdr">Dispatch Orders</div>',
                         unsafe_allow_html=True)
             dispatch_df = pd.DataFrame({
@@ -554,13 +553,13 @@ with tab_sim:
                               "Deploy now" if "accident" in cause else "Not needed"],
             })
             st.dataframe(dispatch_df, hide_index=True, use_container_width=True)
-
+ 
             st.markdown('<div class="section-hdr">Diversion Plan</div>',
                         unsafe_allow_html=True)
             st.caption(f"Corridor-specific steps for {corridor}")
             for i, step in enumerate(r["div_steps"], 1):
                 st.markdown(f"**Step {i}.** {step}")
-
+ 
             st.markdown('<div class="section-hdr">Route Summary</div>',
                         unsafe_allow_html=True)
             if r["path"]:
@@ -570,7 +569,7 @@ with tab_sim:
                     st.caption(f"Rerouted around {r['blocked']} (removed from graph)")
             else:
                 st.error("No viable route found between selected corridors.")
-
+ 
             st.markdown('<div class="section-hdr">Impact Estimate</div>',
                         unsafe_allow_html=True)
             st.markdown(f"""
@@ -578,25 +577,24 @@ with tab_sim:
 |--------|-------|
 | Vehicles affected | {r['veh']:,} |
 | Avg delay per vehicle | {r['avg_del']} min |
-| Estimated economic cost | Rs {r['econ_cost']:,} |
 | Affected radius | {r['radius']:.2f} km |
 """)
-
+ 
         # ── Map panel ───────────────────────────────────────────────────
         with right:
             st.markdown('<div class="section-hdr">Dynamic Rerouting Map</div>',
                         unsafe_allow_html=True)
             st.caption("Node colour: green = low congestion probability, "
                        "orange = moderate, red = high. Active route shown in blue.")
-
+ 
             m = folium.Map(location=[12.97,77.59], zoom_start=12,
                            tiles="CartoDB positron")
-
+ 
             # All edges faint
             for u, v, _ in BASE_EDGES:
                 folium.PolyLine([NODE_COORDS[u],NODE_COORDS[v]],
                                 color="#cccccc",weight=1.5,opacity=0.35).add_to(m)
-
+ 
             # Nodes coloured by congestion probability
             for node, coord in NODE_COORDS.items():
                 p = r["prob_dict"].get(node, 0)
@@ -606,7 +604,7 @@ with tab_sim:
                     fill=True, fill_opacity=0.8,
                     tooltip=f"{node} — congestion prob {p:.0%}",
                 ).add_to(m)
-
+ 
             # Blocked marker
             if r["blocked"] and r["blocked"] in NODE_COORDS:
                 folium.Marker(
@@ -614,7 +612,7 @@ with tab_sim:
                     tooltip=f"Blocked: {r['blocked']}",
                     icon=folium.Icon(color="red", icon="ban", prefix="fa"),
                 ).add_to(m)
-
+ 
             # Route
             if r["path"]:
                 coords_path = [NODE_COORDS[n] for n in r["path"]]
@@ -630,7 +628,7 @@ with tab_sim:
                     tooltip=f"End: {r['path'][-1]}",
                     icon=folium.Icon(color="blue",icon="flag",prefix="fa"),
                 ).add_to(m)
-
+ 
             # Hotspot markers
             for name, (ht_lat, ht_lon) in HOTSPOTS.items():
                 folium.CircleMarker(
@@ -638,15 +636,15 @@ with tab_sim:
                     color="#000000", fill=True, fill_opacity=0.4,
                     tooltip=f"Hotspot: {name.replace('_',' ').title()}",
                 ).add_to(m)
-
+ 
             st_folium(m, width="100%", height=520)
-
+ 
         # ── Feedback ────────────────────────────────────────────────────
         st.markdown("---")
         st.markdown("### Post-event confirmation")
         st.caption("After the event resolves, confirm the actual outcome. "
                    "This closes the learning loop and improves future predictions.")
-
+ 
         fc1, fc2, fc3 = st.columns(3)
         with fc1:
             actual_sev = st.selectbox("Actual severity observed",
@@ -687,44 +685,38 @@ with tab_impact:
     st.markdown("## City-wide Impact Quantification")
     st.caption("Estimated impact of a High-severity event (1.5-hour window) "
                "at each corridor. Based on BBMP average daily vehicle counts.")
-
+ 
     rows = []
     for corr in CORRIDOR_LIST:
-        v, d, c = impact(corr, "High", 1.5)
-        rows.append({"Corridor":corr,"Vehicles":v,"Avg delay (min)":d,
-                     "Economic cost (Rs)":c})
+        v, d = impact(corr, "High", 1.5)
+        rows.append({"Corridor":corr,"Vehicles":v,"Avg delay (min)":d})
     df_imp = pd.DataFrame(rows).sort_values("Vehicles",ascending=False)
-
-    c1,c2,c3 = st.columns(3)
+ 
+    c1,c2 = st.columns(2)
     c1.metric("Total vehicles at risk", f"{df_imp['Vehicles'].sum():,}")
-    c2.metric("Most affected corridor", df_imp.iloc[0]["Corridor"])
-    c3.metric("Total economic exposure", f"Rs {df_imp['Economic cost (Rs)'].sum():,}")
-
+    c2.metric("Most affected corridor", df_imp.iloc[0]["Corridor"],
+              delta=f"{df_imp.iloc[0]['Vehicles']:,} vehicles")
+ 
     st.markdown("---")
-
-    fig_imp, ax_imp = plt.subplots(1, 2, figsize=(14, 6))
+ 
+    fig_imp, ax_imp = plt.subplots(figsize=(9, 6))
     fig_imp.suptitle("Corridor-level Impact — High Severity, 1.5-hour event",
                      fontsize=13, fontweight="bold")
-
+ 
     colors_v = ["#ef476f" if v>5000 else "#ffd166" if v>3500 else "#2dc653"
                 for v in df_imp["Vehicles"]]
-    ax_imp[0].barh(df_imp["Corridor"][::-1], df_imp["Vehicles"][::-1], color=colors_v[::-1])
-    ax_imp[0].set_title("Vehicles impacted")
-    ax_imp[0].set_xlabel("Vehicles")
-    ax_imp[0].axvline(df_imp["Vehicles"].mean(),color="gray",
-                      linestyle="--",alpha=0.6,label="Average")
-    ax_imp[0].legend(fontsize=9)
-    ax_imp[0].grid(axis="x",alpha=0.3)
-
-    ax_imp[1].barh(df_imp["Corridor"][::-1], df_imp["Economic cost (Rs)"][::-1], color="#8338ec")
-    ax_imp[1].set_title("Economic cost (Rs)")
-    ax_imp[1].set_xlabel("Rs")
-    ax_imp[1].grid(axis="x",alpha=0.3)
-
+    ax_imp.barh(df_imp["Corridor"][::-1], df_imp["Vehicles"][::-1], color=colors_v[::-1])
+    ax_imp.set_title("Vehicles impacted per corridor")
+    ax_imp.set_xlabel("Vehicles (1.5-hr window)")
+    ax_imp.axvline(df_imp["Vehicles"].mean(), color="gray",
+                   linestyle="--", alpha=0.6, label="Average")
+    ax_imp.legend(fontsize=9)
+    ax_imp.grid(axis="x", alpha=0.3)
+ 
     plt.tight_layout()
     st.pyplot(fig_imp, use_container_width=True)
     plt.close(fig_imp)
-
+ 
     st.markdown("### Detailed table")
     st.dataframe(df_imp, hide_index=True, use_container_width=True)
 
@@ -815,15 +807,14 @@ with tab_shap:
             st.caption("This can happen if the explainer was saved with a "
                        "different model version. Re-run the notebook to regenerate.")
 
-
 # TAB 4 — FEEDBACK AND LEARNING
 with tab_log:
     st.markdown("## Post-event Learning System")
     st.caption("Every confirmed event is logged. "
                "The accuracy trend shows whether the model is drifting on real operational data.")
-
+ 
     df_log = load_log()
-
+ 
     if df_log.empty:
         st.info("No events logged yet. Submit the first simulation result "
                 "via the Post-event confirmation section.")
@@ -831,22 +822,22 @@ with tab_log:
         df_log["timestamp"] = pd.to_datetime(df_log["timestamp"])
         df_log = df_log.sort_values("timestamp").reset_index(drop=True)
         df_log["rolling_acc"] = df_log["correct"].expanding().mean()
-
+ 
         total   = len(df_log)
         correct = int(df_log["correct"].sum())
         acc     = correct / total
-
+ 
         m1,m2,m3,m4 = st.columns(4)
         m1.metric("Events logged",       total)
         m2.metric("Correct predictions", correct)
         m3.metric("Overall accuracy",    f"{acc:.1%}")
         m4.metric("Last 5 accuracy",     f"{df_log['correct'].tail(5).mean():.1%}")
-
+ 
         st.markdown("---")
-
+ 
         fig_log, axes = plt.subplots(1, 3, figsize=(16, 4))
         fig_log.suptitle("Post-Event Learning Dashboard", fontweight="bold")
-
+ 
         axes[0].plot(df_log.index, df_log["rolling_acc"]*100,
                      color="#3a86ff", linewidth=2, marker="o", markersize=4)
         axes[0].axhline(85, color="gray", linestyle="--", alpha=0.6, label="Target 85%")
@@ -856,7 +847,7 @@ with tab_log:
         axes[0].set_ylim(0,105)
         axes[0].legend(fontsize=9)
         axes[0].grid(alpha=0.3)
-
+ 
         if "prob_high" in df_log.columns and "actual_sev" in df_log.columns:
             act_high = df_log["actual_sev"].isin(["High","Critical"]).astype(int)
             jit = np.random.uniform(-0.04,0.04,len(df_log))
@@ -872,7 +863,7 @@ with tab_log:
             axes[1].set_yticklabels(["No","Yes"])
             axes[1].legend(fontsize=9)
             axes[1].grid(alpha=0.3)
-
+ 
         if "corridor" in df_log.columns and df_log["corridor"].nunique() > 1:
             ca = df_log.groupby("corridor")["correct"].mean().sort_values()
             c_colors = ["#ef476f" if v<0.6 else "#ffd166" if v<0.8
@@ -888,11 +879,11 @@ with tab_log:
                          ha="center",va="center",transform=axes[2].transAxes,
                          color="gray")
             axes[2].set_title("Accuracy by corridor")
-
+ 
         plt.tight_layout()
         st.pyplot(fig_log, use_container_width=True)
         plt.close(fig_log)
-
+ 
         st.markdown("---")
         st.markdown("### Event log (last 50)")
         cols_show = [c for c in ["timestamp","corridor","event_cause","priority",
@@ -900,7 +891,7 @@ with tab_log:
                      if c in df_log.columns]
         st.dataframe(df_log[cols_show].sort_values("timestamp",ascending=False)
                      .head(50), hide_index=True, use_container_width=True)
-
+ 
         dl, cl = st.columns(2)
         with dl:
             st.download_button("Download log as CSV",
