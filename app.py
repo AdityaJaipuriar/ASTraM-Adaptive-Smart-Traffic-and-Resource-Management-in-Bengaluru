@@ -324,9 +324,9 @@ def run_inference(input_df):
     sev_enc  = int(clf.predict(input_df)[0])
     sev_prob = clf.predict_proba(input_df)[0]
     severity = slabels.get(sev_enc, "Unknown")
-    
-    delay  = float(r_del.predict(input_df)[0])
-    radius = float(r_rad.predict(input_df)[0])
+
+    delay  = float(np.expm1(r_del.predict(input_df)[0]))
+    radius = float(np.expm1(r_rad.predict(input_df)[0]))
 
     conf     = float(sev_prob[sev_enc])
  
