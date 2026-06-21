@@ -230,40 +230,6 @@ def hotspot_distances(lat, lon):
     return {f"dist_{k}_km": geodesic((lat, lon), coords).km
             for k, coords in HOTSPOTS.items()}
 
-# Cause severity map — mirrors the data-driven score computed in the notebook.
-# Loaded from dataset at startup; falls back to neutral 5.0 if CSV not available.
-def _get_cause_severity(cause: str) -> float:
-    if df_raw is not None and "cause_severity" in df_raw.columns:
-        val = df_raw.groupby("event_cause")["cause_severity"].mean().get(cause)
-        if val is not None:
-            return float(val)
-    # Fallback: midpoint of the 1–10 scale
-    return 5.0
-
-# Replicates compute_severity_score() from the notebook so the app sends
-# the same congestion_score the model was trained on.
-CAUSE_W_APP = {
-    "accident": 45, "protest": 40, "vip_movement": 15, "public_event": 30,
-    "procession": 28, "vehicle_breakdown": 20, "construction": 22,
-    "water_logging": 18, "pot_holes": 12, "congestion": 25,
-    "tree_fall": 20, "road_conditions": 14, "others": 10,
-}
-
-def _compute_congestion_score(cause, event_type, priority, requires_closure,
-                               corridor, hour, duration_hrs, day_of_week) -> float:
-    s  = CAUSE_W_APP.get(str(cause).lower(), 10)
-    s += 25 if event_type == "unplanned" else 0
-    s += 20 if priority   == "High"      else 0
-    s += 20 if requires_closure          else 0
-    s += 15 if corridor != "Non-corridor" else 0
-    if   7  <= hour < 10: s += 25
-    elif 16 <= hour < 21: s += 30
-    elif 10 <= hour < 16: s += 10
-    else:                 s += 3
-    s += 8 if duration_hrs > 4 else 0
-    s += 5 if day_of_week >= 5 else 0
-    return float(min(s, 100))
-
 def build_row(cause, corridor, priority, hour, day, month,
               zone, veh_type, event_type, requires_closure,
               lat, lon, duration_hrs):
@@ -301,8 +267,6 @@ def build_row(cause, corridor, priority, hour, day, month,
         "geo_cluster":           0,
         "route_length_km":       0.0,
         "duration_log":          dur_log,
-        "congestion_score":      _compute_congestion_score(cause, event_type, priority,requires_closure, corridor, h, duration_hrs, dow),
-        "cause_severity":        _get_cause_severity(cause),
         **hotspot_distances(lat, lon),
     }
  
@@ -323,12 +287,8 @@ def run_inference(input_df):
     sev_enc  = int(clf.predict(input_df)[0])
     sev_prob = clf.predict_proba(input_df)[0]
     severity = slabels.get(sev_enc, "Unknown")
-
-    delay  = float(np.expm1(r_del.predict(input_df)[0]))
-    radius = float(np.expm1(r_rad.predict(input_df)[0]))
-    #delay  = float(r_del.predict(input_df)[0])
-    #radius = float(r_rad.predict(input_df)[0])
-
+    delay    = float(r_del.predict(input_df)[0])
+    radius   = float(r_rad.predict(input_df)[0])
     conf     = float(sev_prob[sev_enc])
  
     # High+Critical combined probability (for threshold at 0.30)
