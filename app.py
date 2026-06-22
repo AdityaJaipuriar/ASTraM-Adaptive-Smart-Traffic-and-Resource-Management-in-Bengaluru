@@ -14,6 +14,7 @@ import joblib
 import matplotlib.pyplot as plt
 import folium
 from streamlit_folium import st_folium
+import streamlit.components.v1 as components
  
 # ──────────────────────────────────────────────────────────────────────────
 # CONFIG
@@ -448,39 +449,59 @@ with tab_corridor:
 # TAB 3 — CORRIDOR MAP
 # ════════════════════════════════════════════════════════════════════════
 with tab_map:
-    st.subheader("Corridor reference map")
-    st.caption("Node size reflects incident count from real data. "
-               "Colour reflects historical closure rate.")
+    st.subheader("Historical Event Heatmap")
+    st.caption("A sampled map of past events across Bengaluru, colour-coded by data-driven severity.")
  
-    if os.path.exists(artifact_path('node_coords.pkl')):
-        node_coords = joblib.load(artifact_path('node_coords.pkl'))
-        cs_map      = ART['corridor_stats'].set_index('corridor')
-        m = folium.Map(location=[12.97, 77.59], zoom_start=11, tiles='CartoDB positron')
+    map_html_path = artifact_path('bengaluru_events_map.html')
+    map_pkl_path  = artifact_path('map_sample.pkl')
  
-        for corridor_name, (lat, lon) in node_coords.items():
-            if corridor_name in cs_map.index:
-                count   = int(cs_map.loc[corridor_name, 'total_incidents'])
-                cl_pct  = float(cs_map.loc[corridor_name, 'closure_pct'])
-                top_c   = str(cs_map.loc[corridor_name, 'most_common_cause'])
-                color   = '#e74c3c' if cl_pct > 60 else '#f39c12' if cl_pct > 30 else '#2dc653'
-                popup_txt = (f"<b>{corridor_name}</b><br>"
-                             f"Incidents: {count}<br>"
-                             f"Closure rate: {cl_pct}%<br>"
-                             f"Top cause: {top_c}")
-                radius  = max(4, count / 30)
-            else:
-                color, radius, popup_txt = '#aaaaaa', 5, corridor_name
+    # OPTION 1: Load the HTML file directly (Fastest & Most Efficient)
+    if os.path.exists(map_html_path):
+        with open(map_html_path, 'r', encoding='utf-8') as f:
+            html_data = f.read()
+        components.html(html_data, height=600, scrolling=True)
  
+    # OPTION 2: Generate dynamically via st_folium (Requires exporting the dataframe)
+    elif os.path.exists(map_pkl_path):
+        sample = joblib.load(map_pkl_path)
+        COLOR_MAP = {'Low': 'green', 'Moderate': 'orange', 'High': 'red', 'Critical': 'darkred'}
+        m = folium.Map(location=[12.97, 77.59], zoom_start=12, tiles='CartoDB positron')
+ 
+        for _, row in sample.iterrows():
+            sev   = str(row.get('severity_label', 'Unknown'))
+            cause = str(row.get('event_cause', ''))
+            corr  = str(row.get('corridor', ''))
             folium.CircleMarker(
-                location=[lat, lon], radius=radius,
-                color=color, fill=True, fill_opacity=0.7,
-                popup=folium.Popup(popup_txt, max_width=200),
-                tooltip=corridor_name,
+                location=[row['latitude'], row['longitude']],
+                radius=5,
+                color=COLOR_MAP.get(sev, 'gray'),
+                fill=True, fill_opacity=0.7,
+                popup=folium.Popup(
+                    f"<b>{str(row.get('event_type', '')).title()}</b><br>"
+                    f"Cause: {cause}<br>"
+                    f"Corridor: {corr}<br>"
+                    f"Severity: <b>{sev}</b><br>"
+                    f"Closure required: {bool(row.get('requires_road_closure', False))}<br>"
+                    f"Duration: {row.get('duration_hrs', 0):.1f} hrs",
+                    max_width=220
+                )
             ).add_to(m)
  
+        legend_html = '''
+        <div style="position:fixed;bottom:30px;left:30px;z-index:1000;
+             background:white;padding:12px;border-radius:8px;
+             border:1px solid #ccc;font-size:13px;">
+          <b>Event severity</b><br>
+          <span style="color:green">&#9679;</span> Low<br>
+          <span style="color:orange">&#9679;</span> Moderate<br>
+          <span style="color:red">&#9679;</span> High<br>
+          <span style="color:darkred">&#9679;</span> Critical
+        </div>'''
+        m.get_root().html.add_child(folium.Element(legend_html))
         st_folium(m, width=900, height=550)
+ 
     else:
-        st.warning("`node_coords.pkl` not found. Copy it here alongside the other .pkl files if you want the map.")
+        st.warning("Map not found! Please place `bengaluru_events_map.html` in your GitHub repository.")
  
 # ════════════════════════════════════════════════════════════════════════
 # TAB 4 — MODEL ACCURACY LOG
