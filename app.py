@@ -1,16 +1,6 @@
 """
 ASTraM — Adaptive Smart Traffic & Resource Management
 Streamlit deployment app.
- 
-Loads the artefacts saved by the notebook and exposes the recommend()
-pipeline through a form: pick an event, get a closure probability,
-resource counts, historical corridor context, and a written diversion
-plan.
- 
-Run with:
-    streamlit run app.py
- 
-Expects all .pkl artefacts to sit in the same folder as this file.
 """
  
 import os
@@ -32,14 +22,12 @@ ARTIFACT_DIR = os.path.dirname(os.path.abspath(__file__))
  
 st.set_page_config(
     page_title="ASTraM — Traffic Event Console",
-    page_icon=None,
+    page_icon="🚦",
     layout="wide",
 )
  
- 
 def artifact_path(name: str) -> str:
     return os.path.join(ARTIFACT_DIR, name)
- 
  
 # ──────────────────────────────────────────────────────────────────────────
 # ARTEFACT LOADING
@@ -52,8 +40,7 @@ def load_artifacts():
         'resource_model_manpower.pkl', 'resource_model_barricades.pkl',
         'resource_model_tow.pkl', 'resource_features.pkl',
         'corridor_stats.pkl', 'hotspots.pkl',
-        'cause_severity_map.pkl', 'diversion_templates.pkl',
-        'deploy_threshold.pkl',
+        'diversion_templates.pkl', 'deploy_threshold.pkl',
     ]
     for f in required:
         if not os.path.exists(artifact_path(f)):
@@ -70,26 +57,21 @@ def load_artifacts():
         'resource_features':   joblib.load(artifact_path('resource_features.pkl')),
         'corridor_stats':      joblib.load(artifact_path('corridor_stats.pkl')),
         'hotspots':            joblib.load(artifact_path('hotspots.pkl')),
-        'cause_severity_map':  joblib.load(artifact_path('cause_severity_map.pkl')),
         'diversion_templates': joblib.load(artifact_path('diversion_templates.pkl')),
         'deploy_threshold':    joblib.load(artifact_path('deploy_threshold.pkl')),
     }
     return artifacts, []
- 
  
 ART, MISSING = load_artifacts()
  
 if ART is None:
     st.title("ASTraM — Traffic Event Console")
     st.error(
-        "Some model artefacts are missing. Run the notebook's "
-        "'Saving All Artefacts' section first, then copy the "
-        "generated .pkl files next to app.py."
+        "Some model artefacts are missing. Ensure all required .pkl files are in the main directory."
     )
     for f in MISSING:
         st.write(f"- `{f}`")
     st.stop()
- 
  
 # ──────────────────────────────────────────────────────────────────────────
 # CORE LOGIC
@@ -101,9 +83,8 @@ def haversine_km(lat1, lon1, lat2, lon2):
     a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
     return R * 2 * np.arcsin(np.sqrt(a))
  
- 
-def build_feature_row(event: dict, feature_cols: list, cause_severity_map,
-                       hotspots: dict, closure_value=None) -> pd.Series:
+def build_feature_row(event: dict, feature_cols: list, corridor_rates: dict,
+                       zone_rates: dict, hotspots: dict, closure_value=None) -> pd.Series:
     row = pd.Series(0, index=feature_cols, dtype=float)
     row['latitude']       = event['latitude']
     row['longitude']      = event['longitude']
@@ -115,14 +96,24 @@ def build_feature_row(event: dict, feature_cols: list, cause_severity_map,
     row['Is_Weekend']     = event.get('is_weekend', 0)
     row['Is_Rush_Hour']   = 1 if (7 <= event['hour'] <= 10 or 17 <= event['hour'] <= 20) else 0
     row['geo_cluster']    = event.get('geo_cluster', 0)
-    default_sev = float(np.median(list(cause_severity_map.values())))
-    row['cause_severity'] = cause_severity_map.get(event['event_cause'], default_sev)
+
+    # Data-Driven Closure Rates
+    if 'corridor_closure_rate' in row.index and corridor_rates:
+        default_corr = float(np.median(list(corridor_rates.values())))
+        row['corridor_closure_rate'] = corridor_rates.get(event['corridor'], default_corr)
+
+    if 'zone_closure_rate' in row.index and zone_rates:
+        default_zone = float(np.median(list(zone_rates.values())))
+        row['zone_closure_rate'] = zone_rates.get(event.get('zone', 'Zone_Unknown'), default_zone)
+
     if closure_value is not None and 'requires_road_closure' in row.index:
         row['requires_road_closure'] = closure_value
+
     for name, (hlat, hlon) in hotspots.items():
         col = f'dist_{name}_km'
         if col in row.index:
             row[col] = haversine_km(event['latitude'], event['longitude'], hlat, hlon)
+
     for prefix, value in [
         ('event_cause_',    event['event_cause']),
         ('corridor_',       event['corridor']),
@@ -134,8 +125,8 @@ def build_feature_row(event: dict, feature_cols: list, cause_severity_map,
         col = f'{prefix}{value}'
         if col in row.index:
             row[col] = 1
+
     return row
- 
  
 def get_diversion(corridor_name: str, templates: dict):
     name = str(corridor_name).strip()
@@ -147,7 +138,6 @@ def get_diversion(corridor_name: str, templates: dict):
         if key.lower() in name.lower():
             return templates[key]
     return templates['default']
- 
  
 def get_corridor_history(corridor: str) -> dict:
     """Return real historical stats for the corridor from the saved dataset summary."""
@@ -164,25 +154,33 @@ def get_corridor_history(corridor: str) -> dict:
         'most_common_cause':  str(r['most_common_cause']),
     }
  
- 
 def recommend(event: dict) -> dict:
-    closure_row    = build_feature_row(event, ART['model_features'],
-                                        ART['cause_severity_map'], ART['hotspots'])
+    # --- THE FIX: Calculate rates dynamically from the existing corridor_stats file! ---
+    cs_df = ART['corridor_stats']
+    # Convert the closure percentage (e.g. 45.5%) into a 0-1 rate (e.g. 0.455)
+    dynamic_corridor_rates = dict(zip(cs_df['corridor'], cs_df['closure_pct'] / 100.0))
+    dynamic_zone_rates = {} # We leave this empty, the row builder will safely handle it!
+    # -----------------------------------------------------------------------------------
+
+    closure_row = build_feature_row(event, ART['model_features'], 
+                                    dynamic_corridor_rates, dynamic_zone_rates, ART['hotspots'])
+    
     closure_row_df = pd.DataFrame([closure_row])[ART['model_features']]
     closure_prob   = float(ART['closure_model'].predict_proba(closure_row_df)[0, 1])
     closure_pred   = int(closure_prob >= ART['deploy_threshold'])
- 
+
     res_row    = build_feature_row(event, ART['resource_features'],
-                                    ART['cause_severity_map'], ART['hotspots'],
-                                    closure_value=closure_pred)
+                                   dynamic_corridor_rates, dynamic_zone_rates, ART['hotspots'],
+                                   closure_value=closure_pred)
+                                   
     res_row_df = pd.DataFrame([res_row])[ART['resource_features']]
     manpower   = int(round(ART['manpower_model'].predict(res_row_df)[0]))
     barricades = int(round(ART['barricades_model'].predict(res_row_df)[0]))
     tow        = int(round(ART['tow_model'].predict(res_row_df)[0]))
- 
+
     diverts = 1 if closure_prob < 0.3 else (2 if closure_prob < 0.6 else 3)
     plan    = get_diversion(event.get('corridor', ''), ART['diversion_templates'])[:diverts + 1]
- 
+
     return {
         'closure_probability': closure_prob,
         'closure_predicted':   bool(closure_pred),
@@ -192,12 +190,10 @@ def recommend(event: dict) -> dict:
         'diversion_plan':      plan,
     }
  
- 
 # ──────────────────────────────────────────────────────────────────────────
 # FEEDBACK LOG
 # ──────────────────────────────────────────────────────────────────────────
 LOG_FILE = artifact_path('event_feedback_log.json')
- 
  
 def log_event(record: dict):
     log = []
@@ -208,14 +204,12 @@ def log_event(record: dict):
     with open(LOG_FILE, 'w') as f:
         json.dump(log, f, indent=2)
  
- 
 def load_log():
     if not os.path.exists(LOG_FILE):
         return pd.DataFrame()
     with open(LOG_FILE, 'r') as f:
         log = json.load(f)
     return pd.DataFrame(log)
- 
  
 # ──────────────────────────────────────────────────────────────────────────
 # UI
@@ -231,7 +225,11 @@ tab_predict, tab_corridor, tab_map, tab_log = st.tabs([
     "New Event", "Corridor Risk Profile", "Corridor Map", "Model Accuracy Log"
 ])
  
-CAUSE_OPTIONS    = sorted(ART['cause_severity_map'].keys())
+# Safely extract cause options from model features
+CAUSE_OPTIONS = sorted([c.replace('event_cause_', '') for c in ART['model_features'] if c.startswith('event_cause_')])
+if not CAUSE_OPTIONS:
+    CAUSE_OPTIONS = ['accident', 'vehicle_breakdown', 'vip_movement', 'public_event', 'water_logging']
+
 CORRIDOR_OPTIONS = sorted(ART['corridor_stats']['corridor'].tolist()) + ['Non-corridor']
 ZONE_OPTIONS     = ['Zone_Unknown', 'Central Zone 1', 'Central Zone 2',
                     'East Zone 1', 'East Zone 2', 'North Zone 1', 'North Zone 2',
@@ -388,7 +386,7 @@ with tab_corridor:
     k1.metric("Total corridors tracked",    len(cs))
     k2.metric("Most incident-prone",        cs.iloc[0]['corridor'],
               delta=f"{int(cs.iloc[0]['total_incidents'])} incidents")
-    worst_closure = cs.sort_values('closure_rate', ascending=False).iloc[0]
+    worst_closure = cs.sort_values('closure_rate' if 'closure_rate' in cs.columns else 'closure_pct', ascending=False).iloc[0]
     k3.metric("Highest closure rate",       worst_closure['corridor'],
               delta=f"{worst_closure['closure_pct']}% of incidents")
  
@@ -410,7 +408,7 @@ with tab_corridor:
     ax.grid(axis='x', alpha=0.3)
  
     ax = axes_c[1]
-    top_cl = cs.sort_values('closure_rate', ascending=False).head(12)
+    top_cl = cs.sort_values('closure_rate' if 'closure_rate' in cs.columns else 'closure_pct', ascending=False).head(12)
     colors1 = ['#ef476f' if v > 60 else '#ffd166' if v > 30 else '#2dc653'
                for v in top_cl['closure_pct']]
     ax.barh(top_cl['corridor'][::-1], top_cl['closure_pct'][::-1], color=colors1[::-1])
@@ -419,7 +417,7 @@ with tab_corridor:
     ax.grid(axis='x', alpha=0.3)
  
     ax = axes_c[2]
-    top_hp = cs.sort_values('high_priority_rate', ascending=False).head(12)
+    top_hp = cs.sort_values('high_priority_rate' if 'high_priority_rate' in cs.columns else 'high_priority_pct', ascending=False).head(12)
     ax.barh(top_hp['corridor'][::-1], top_hp['high_priority_pct'][::-1], color='#8338ec')
     ax.set_title("High-priority incident rate %")
     ax.set_xlabel("% flagged as High priority")
@@ -482,7 +480,7 @@ with tab_map:
  
         st_folium(m, width=900, height=550)
     else:
-        st.warning("`node_coords.pkl` not found. Copy it here alongside the other .pkl files.")
+        st.warning("`node_coords.pkl` not found. Copy it here alongside the other .pkl files if you want the map.")
  
 # ════════════════════════════════════════════════════════════════════════
 # TAB 4 — MODEL ACCURACY LOG
