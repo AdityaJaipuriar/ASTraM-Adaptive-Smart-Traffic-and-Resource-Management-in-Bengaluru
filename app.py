@@ -16,9 +16,7 @@ import folium
 from streamlit_folium import st_folium
 import streamlit.components.v1 as components
  
-# ──────────────────────────────────────────────────────────────────────────
 # CONFIG
-# ──────────────────────────────────────────────────────────────────────────
 ARTIFACT_DIR = os.path.dirname(os.path.abspath(__file__))
  
 st.set_page_config(
@@ -29,10 +27,8 @@ st.set_page_config(
  
 def artifact_path(name: str) -> str:
     return os.path.join(ARTIFACT_DIR, name)
- 
-# ──────────────────────────────────────────────────────────────────────────
+
 # ARTEFACT LOADING
-# ──────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_artifacts():
     missing = []
@@ -73,10 +69,8 @@ if ART is None:
     for f in MISSING:
         st.write(f"- `{f}`")
     st.stop()
- 
-# ──────────────────────────────────────────────────────────────────────────
+
 # CORE LOGIC
-# ──────────────────────────────────────────────────────────────────────────
 def haversine_km(lat1, lon1, lat2, lon2):
     R = 6371.0
     lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
@@ -156,12 +150,11 @@ def get_corridor_history(corridor: str) -> dict:
     }
  
 def recommend(event: dict) -> dict:
-    # --- THE FIX: Calculate rates dynamically from the existing corridor_stats file! ---
+    # Calculate rates dynamically from the existing corridor_stats file
     cs_df = ART['corridor_stats']
     # Convert the closure percentage (e.g. 45.5%) into a 0-1 rate (e.g. 0.455)
     dynamic_corridor_rates = dict(zip(cs_df['corridor'], cs_df['closure_pct'] / 100.0))
     dynamic_zone_rates = {} # We leave this empty, the row builder will safely handle it!
-    # -----------------------------------------------------------------------------------
 
     closure_row = build_feature_row(event, ART['model_features'], 
                                     dynamic_corridor_rates, dynamic_zone_rates, ART['hotspots'])
@@ -190,10 +183,8 @@ def recommend(event: dict) -> dict:
         'tow_trucks_required': tow,
         'diversion_plan':      plan,
     }
- 
-# ──────────────────────────────────────────────────────────────────────────
+
 # FEEDBACK LOG
-# ──────────────────────────────────────────────────────────────────────────
 LOG_FILE = artifact_path('event_feedback_log.json')
  
 def log_event(record: dict):
@@ -211,10 +202,8 @@ def load_log():
     with open(LOG_FILE, 'r') as f:
         log = json.load(f)
     return pd.DataFrame(log)
- 
-# ──────────────────────────────────────────────────────────────────────────
-# UI
-# ──────────────────────────────────────────────────────────────────────────
+
+# UI (User Interface)
 st.title("ASTraM — Traffic Event Console")
 st.caption(
     "Predict whether a logged traffic event will require a road closure, "
@@ -237,10 +226,8 @@ ZONE_OPTIONS     = ['Zone_Unknown', 'Central Zone 1', 'Central Zone 2',
                     'South Zone 1', 'South Zone 2', 'West Zone 1', 'West Zone 2']
 VEH_TYPE_OPTIONS = ['No_Vehicle_or_Unknown', 'bmtc_bus', 'ksrtc_bus', 'private_bus',
                     'heavy_vehicle', 'lcv', 'truck', 'private_car', 'taxi', 'auto', 'others']
- 
-# ════════════════════════════════════════════════════════════════════════
+
 # TAB 1 — NEW EVENT
-# ════════════════════════════════════════════════════════════════════════
 with tab_predict:
     left, right = st.columns([1, 1.3])
  
@@ -291,18 +278,18 @@ with tab_predict:
             result = recommend(event)
             hist   = get_corridor_history(corridor)
  
-            # ── Closure prediction ─────────────────────────────────────
+            # Closure prediction 
             badge = "ROAD CLOSURE LIKELY" if result['closure_predicted'] else "closure unlikely"
             st.metric("Closure probability",
                       f"{result['closure_probability']*100:.1f}%", badge)
  
-            # ── Resource dispatch ──────────────────────────────────────
+            # Resource dispatch
             m1, m2, m3 = st.columns(3)
             m1.metric("Manpower",          result['manpower_required'])
             m2.metric("Barricade sections",result['barricade_sections'])
             m3.metric("Tow trucks",        result['tow_trucks_required'])
  
-            # ── Historical corridor context from real data ──────────────
+            # Historical corridor context from real data
             st.markdown("#### Historical risk profile for this corridor")
             if hist:
                 h1, h2, h3 = st.columns(3)
@@ -338,12 +325,12 @@ with tab_predict:
             else:
                 st.info("No historical records found for this corridor in the dataset.")
  
-            # ── Diversion plan ─────────────────────────────────────────
+            # Diversion plan 
             st.markdown("#### Diversion plan")
             for i, step in enumerate(result['diversion_plan'], 1):
                 st.write(f"{i}. {step}")
  
-            # ── Feedback log ───────────────────────────────────────────
+            # Feedback log
             st.divider()
             st.markdown("##### Log outcome (after the event resolves)")
             actual_closure = st.radio(
@@ -374,9 +361,7 @@ with tab_predict:
         else:
             st.info("Fill in the event details and click 'Get recommendation'.")
  
-# ════════════════════════════════════════════════════════════════════════
 # TAB 2 — CORRIDOR RISK PROFILE (real data)
-# ════════════════════════════════════════════════════════════════════════
 with tab_corridor:
     st.subheader("Corridor Risk Profile")
     st.caption("All figures computed directly from the ASTraM operational dataset.")
@@ -428,7 +413,7 @@ with tab_corridor:
     st.pyplot(fig_c, use_container_width=True)
     plt.close(fig_c)
  
-    # ── Cause heatmap ──────────────────────────────────────────────────
+    # Cause heatmap 
     st.markdown("### Most common event cause per corridor")
     st.dataframe(
         cs[['corridor', 'total_incidents', 'closure_pct',
@@ -445,9 +430,7 @@ with tab_corridor:
         use_container_width=True,
     )
  
-# ════════════════════════════════════════════════════════════════════════
 # TAB 3 — CORRIDOR MAP
-# ════════════════════════════════════════════════════════════════════════
 with tab_map:
     st.subheader("Historical Event Heatmap")
     st.caption("A sampled map of past events across Bengaluru, colour-coded by data-driven severity.")
@@ -503,9 +486,7 @@ with tab_map:
     else:
         st.warning("Map not found! Please place `bengaluru_events_map.html` in your GitHub repository.")
  
-# ════════════════════════════════════════════════════════════════════════
 # TAB 4 — MODEL ACCURACY LOG
-# ════════════════════════════════════════════════════════════════════════
 with tab_log:
     st.subheader("Prediction accuracy over time")
     df_log = load_log()
